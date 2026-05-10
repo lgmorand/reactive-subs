@@ -1,0 +1,121 @@
+name: Monthly Azure RG Smoke Test
+
+on:
+  schedule:
+    - cron: "0 3 1 * *"
+  workflow_dispatch:
+
+jobs:
+  rg-create-delete:
+    runs-on: ubuntu-latest
+    env:
+      AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+      AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+      AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+      AZURE_LOCATION: ${{ vars.AZURE_LOCATION }}
+      AZ_SUBSCRIPTION_01: ${{ vars.AZ_SUBSCRIPTION_01 }}
+      AZ_SUBSCRIPTION_02: ${{ vars.AZ_SUBSCRIPTION_02 }}
+      AZ_SUBSCRIPTION_03: ${{ vars.AZ_SUBSCRIPTION_03 }}
+      AZ_SUBSCRIPTION_04: ${{ vars.AZ_SUBSCRIPTION_04 }}
+      AZ_SUBSCRIPTION_05: ${{ vars.AZ_SUBSCRIPTION_05 }}
+      AZ_SUBSCRIPTION_06: ${{ vars.AZ_SUBSCRIPTION_06 }}
+      AZ_SUBSCRIPTION_07: ${{ vars.AZ_SUBSCRIPTION_07 }}
+      AZ_SUBSCRIPTION_08: ${{ vars.AZ_SUBSCRIPTION_08 }}
+      AZ_SUBSCRIPTION_09: ${{ vars.AZ_SUBSCRIPTION_09 }}
+      AZ_SUBSCRIPTION_10: ${{ vars.AZ_SUBSCRIPTION_10 }}
+    steps:
+      - name: Validate configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          required_secrets=(AZURE_TENANT_ID AZURE_CLIENT_ID AZURE_CLIENT_SECRET)
+          for key in "${required_secrets[@]}"; do
+            if [[ -z "${!key:-}" ]]; then
+              echo "Missing required secret: $key"
+              exit 1
+            fi
+          done
+
+          required_subs=(
+            AZ_SUBSCRIPTION_01
+            AZ_SUBSCRIPTION_02
+            AZ_SUBSCRIPTION_03
+            AZ_SUBSCRIPTION_04
+            AZ_SUBSCRIPTION_05
+            AZ_SUBSCRIPTION_06
+            AZ_SUBSCRIPTION_07
+            AZ_SUBSCRIPTION_08
+            AZ_SUBSCRIPTION_09
+            AZ_SUBSCRIPTION_10
+          )
+
+          for key in "${required_subs[@]}"; do
+            if [[ -z "${!key:-}" ]]; then
+              echo "Missing required repository variable: $key"
+              exit 1
+            fi
+          done
+
+      - name: Azure login (service principal)
+        shell: bash
+        run: |
+          set -euo pipefail
+          az login \
+            --service-principal \
+            --username "$AZURE_CLIENT_ID" \
+            --password "$AZURE_CLIENT_SECRET" \
+            --tenant "$AZURE_TENANT_ID" \
+            --output none
+
+      - name: Create and delete a resource group in each subscription
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          location="${AZURE_LOCATION:-westeurope}"
+          subscriptions=(
+            "$AZ_SUBSCRIPTION_01"
+            "$AZ_SUBSCRIPTION_02"
+            "$AZ_SUBSCRIPTION_03"
+            "$AZ_SUBSCRIPTION_04"
+            "$AZ_SUBSCRIPTION_05"
+            "$AZ_SUBSCRIPTION_06"
+            "$AZ_SUBSCRIPTION_07"
+            "$AZ_SUBSCRIPTION_08"
+            "$AZ_SUBSCRIPTION_09"
+            "$AZ_SUBSCRIPTION_10"
+          )
+
+          for i in "${!subscriptions[@]}"; do
+            index=$(printf "%02d" "$((i + 1))")
+            subscription_id="${subscriptions[$i]}"
+            resource_group_name="rg-gha-smoke-${GITHUB_RUN_ID}-${index}"
+
+            echo "Processing subscription ${index}: ${subscription_id}"
+            az account set --subscription "$subscription_id"
+
+            echo "Creating ${resource_group_name} in ${location}"
+            az group create \
+              --name "$resource_group_name" \
+              --location "$location" \
+              --tags purpose=gha-smoke run_id="$GITHUB_RUN_ID" \
+              --output none
+
+            echo "Deleting ${resource_group_name}"
+            az group delete \
+              --name "$resource_group_name" \
+              --yes \
+              --output none
+
+            az group wait \
+              --name "$resource_group_name" \
+              --deleted \
+              --interval 10 \
+              --timeout 900
+          done
+
+      - name: Azure logout
+        if: always()
+        shell: bash
+        run: az logout
